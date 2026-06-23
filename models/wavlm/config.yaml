@@ -1,0 +1,16 @@
+exp_name: CodecFake_wavlm_Nes2Net
+model:
+  type: StandardDetector
+  frontend:
+    type: wavlm
+    args:
+      ckpt_path: placeholder  # overridden at runtime by infer.py stub logic
+      freeze: false
+      source: unil
+  backend:
+    type: Nes2Net
+  loss:
+  - type: CrossEntropy
+    embedding_dim: 1024
+    n_classes: 2
+    weight: 1.0

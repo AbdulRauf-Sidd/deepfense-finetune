@@ -1,0 +1,207 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# DeepFense Fine-tuning Config
+# Model   : WavLM Large + Nes2Net
+# Pretrained on : CodecFake (CodecFake_WavLM_Nes2Net_NoAug_Seed42)
+# Target domain : YouTube / Social media deepfake detection
+# Hardware: Single A100/H100
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+# ── Seed ──────────────────────────────────────────────────────────────────────
+seed: 42
+
+
+# ── Pretrained checkpoint to start from ───────────────────────────────────────
+finetune:
+  checkpoint: models/wavlm/codecfake_wavlm_nes2net_best_model.pth
+  reset_classifier: false     # keep learned weights, adapt them to new domain
+
+
+# ── Model ─────────────────────────────────────────────────────────────────────
+frontend:
+  name: WavLM
+  model_size: large           # WavLM Large — what the checkpoint was trained with
+  pretrained: true
+
+  # Freezing strategy:
+  # WavLM Large has 24 transformer layers.
+  # We freeze all but the last 2 to preserve general acoustic representations
+  # while allowing slight adaptation to YouTube codec artifacts.
+  # With ~44k training clips this is the right balance — full freeze risks
+  # underfitting, full unfreeze risks catastrophic forgetting.
+  freeze: true
+  unfreeze_last_n_layers: 2   # unfreeze layers 23 and 24 only
+  unfreeze_lr: 1.0e-5         # much lower LR for frontend — don't disturb priors
+
+backend:
+  name: Nes2Net
+
+
+# ── Dataset ───────────────────────────────────────────────────────────────────
+data:
+  root: ai_audio_dataset
+
+  splits:
+    train: train
+    val:   validation
+    test:  testing
+
+  # Label convention: subfolders named "real" and "fake"
+  # Expected structure:
+  #   ai_audio_dataset/real/train/*.wav
+  #   ai_audio_dataset/fake/train/*.wav
+  #   ai_audio_dataset/real/validation/*.wav  etc.
+  real_label: 0
+  fake_label: 1
+
+  sample_rate: 16000
+  max_duration: 7.0           # seconds — clips longer than this are truncated
+  min_duration: 2.0           # clips shorter than this are skipped at load time
+
+  # Padding: shorter clips are zero-padded to max_duration
+  # This is fine — model learns to ignore padding via attention masks
+  pad_to_max: true
+
+
+# ── Augmentations ─────────────────────────────────────────────────────────────
+# These simulate the platform re-encoding pipeline your model failed on.
+# Applied on-the-fly during training only — never applied to val or test.
+augmentations:
+
+  # Codec simulation — the most important augmentation for your use case.
+  # Simulates AAC/MP3/Opus re-encoding that YouTube and other platforms apply.
+  - name: Codec
+    params:
+      codecs: [aac, mp3, opus]
+      bitrates:
+        aac:  [64, 96, 128, 192, 256]   # YouTube uses 128-256, Instagram 128
+        mp3:  [96, 128, 192]
+        opus: [32, 48, 64, 96]          # WhatsApp/Telegram use 32-64
+      prob: 0.65                        # apply to 65% of batches
+
+  # RawBoost — signal-level noise augmentation designed specifically for
+  # anti-spoofing. Adds linear and non-linear convolutive noise.
+  - name: RawBoost
+    params:
+      algo: [1, 2, 3]                   # LnL, ISD, SSI noise types
+      prob: 0.35
+
+  # Additive background noise using MUSAN dataset.
+  # Download: https://www.openslr.org/17/
+  # If you don't have MUSAN, set prob to 0.0 and enable later.
+  - name: AdditiveNoise
+    params:
+      noise_dir: data/musan/noise
+      snr_range: [5, 25]                # SNR in dB — 5 is quite noisy
+      prob: 0.30
+
+  # Room impulse response — simulates different recording environments.
+  # Also from MUSAN or RIR datasets.
+  - name: RIR
+    params:
+      rir_dir: data/musan/room_impulse
+      prob: 0.20
+
+  # Speed perturbation — small tempo shifts that don't change pitch.
+  # Adds robustness to slightly sped-up/slowed-down platform content.
+  - name: SpeedPerturb
+    params:
+      rates: [0.95, 1.0, 1.05]         # ±5% speed variation
+      prob: 0.20
+
+  # Multiple re-encoding chain — simulates re-uploaded content that has
+  # been encoded more than once (e.g. downloaded then re-uploaded).
+  - name: Codec
+    params:
+      codecs: [aac, mp3]
+      bitrates:
+        aac: [64, 128]
+        mp3: [96, 128]
+      chain: 2                          # encode → decode → encode again
+      prob: 0.20                        # apply to 20% on top of single codec aug
+
+
+# ── Loss function ──────────────────────────────────────────────────────────────
+loss:
+  name: AM-Softmax             # Additive Margin Softmax
+  params:
+    margin: 0.2                # angular margin — pushes real/fake embeddings apart
+    scale:  30                 # feature scale factor
+  # Why AM-Softmax over CrossEntropy:
+  # Your train set has codec-augmented data that creates soft boundaries between
+  # real and fake. AM-Softmax enforces a margin that makes the decision boundary
+  # more robust to the distribution shift you observed (AUC 0.387).
+
+
+# ── Training ──────────────────────────────────────────────────────────────────
+training:
+  epochs: 30
+
+  optimizer: AdamW
+  lr: 1.0e-4                   # main LR for Nes2Net backend
+  weight_decay: 1.0e-4
+  betas: [0.9, 0.999]
+
+  # Scheduler: warm up for 3 epochs then cosine decay
+  # Warmup prevents large gradient updates from destabilising the
+  # partially-unfrozen WavLM layers early in training.
+  scheduler: CosineAnnealingWarmRestarts
+  warmup_epochs: 3
+  eta_min: 1.0e-6              # minimum LR at end of cosine decay
+
+  # Batch size: 64 is safe for A100 80GB with WavLM Large + 7s clips.
+  # If you hit OOM, reduce to 48 or 32.
+  batch_size: 64
+  num_workers: 8               # A100 can feed data fast — use 8 workers
+
+  # Mixed precision: bf16 is preferred over fp16 on A100/H100.
+  # More numerically stable, same speed benefit.
+  mixed_precision: bf16
+
+  # Gradient clipping — important with partially unfrozen WavLM.
+  # Prevents exploding gradients in the unfrozen transformer layers.
+  gradient_clip: 1.0
+
+  # Gradient accumulation — effectively doubles your batch size without
+  # extra VRAM. Set to 1 to disable (not needed on A100 with batch_size 64).
+  gradient_accumulation_steps: 1
+
+  # Early stopping — monitor val EER, stop if no improvement for 7 epochs.
+  # EER is the right metric here, not loss or accuracy.
+  early_stopping:
+    patience: 7
+    monitor: eer
+    mode: min                  # lower EER is better
+
+  # Save best checkpoint based on val EER
+  checkpoint_metric: eer
+  checkpoint_mode: min
+
+
+# ── Evaluation ────────────────────────────────────────────────────────────────
+evaluation:
+  metrics:
+    - eer                      # primary metric — threshold-independent
+    - min_dcf                  # secondary — weighted cost of errors
+    - auc                      # sanity check — should be > 0.5 immediately
+    - accuracy                 # informational only, don't use for decisions
+  dcf_params:
+    p_target: 0.05             # prior probability of a fake clip
+    c_miss:   1                # cost of missing a fake
+    c_fa:     1                # cost of false alarm on real
+
+  # Run full test set evaluation after training completes
+  run_test_after_training: true
+
+
+# ── Output ────────────────────────────────────────────────────────────────────
+output:
+  dir: outputs/finetune_social_media
+  save_last: true              # save last epoch in addition to best
+  save_scores: true            # dump raw scores to CSV for analysis
+
+# Uncomment to enable Weights & Biases experiment tracking
+# wandb:
+#   project: deepfense-social-media
+#   name: WavLM-Nes2Net-finetune-v1
+#   tags: [wavlm, nes2net, youtube, social-media]

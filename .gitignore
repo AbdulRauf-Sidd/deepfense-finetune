@@ -1,0 +1,14 @@
+deepfense_env/
+__pycache__/
+*.pyc
+
+# data — stored in S3
+data/
+training_data/
+ai_audio_dataset/
+
+# model weights — stored in S3
+models/wavlm/*.pth
+
+# training outputs
+outputs/
