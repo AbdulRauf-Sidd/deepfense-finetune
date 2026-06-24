@@ -419,10 +419,9 @@ def parse_args():
 def main():
     args = parse_args()
 
-    # device = torch.device(
-    #     args.device if args.device else ("cuda" if torch.cuda.is_available() else "cpu")
-    # )
-    device = "cpu"
+    device = torch.device(
+        args.device if args.device else ("cuda" if torch.cuda.is_available() else "cpu")
+    )
     log.info(f"Device: {device}")
 
     model_dir = Path(args.model_dir)

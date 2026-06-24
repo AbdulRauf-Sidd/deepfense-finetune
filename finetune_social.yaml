@@ -23,15 +23,9 @@ frontend:
   model_size: large           # WavLM Large — what the checkpoint was trained with
   pretrained: true
 
-  # Freezing strategy:
-  # WavLM Large has 24 transformer layers.
-  # We freeze all but the last 2 to preserve general acoustic representations
-  # while allowing slight adaptation to YouTube codec artifacts.
-  # With ~44k training clips this is the right balance — full freeze risks
-  # underfitting, full unfreeze risks catastrophic forgetting.
   freeze: true
-  unfreeze_last_n_layers: 2   # unfreeze layers 23 and 24 only
-  unfreeze_lr: 1.0e-5         # much lower LR for frontend — don't disturb priors
+  unfreeze_last_n_layers: 0
+  unfreeze_lr: 1.0e-5
 
 backend:
   name: Nes2Net
@@ -144,7 +138,7 @@ training:
   epochs: 30
 
   optimizer: AdamW
-  lr: 1.0e-4                   # main LR for Nes2Net backend
+  lr: 1.0e-5                   # main LR for Nes2Net backend
   weight_decay: 1.0e-4
   betas: [0.9, 0.999]
 
