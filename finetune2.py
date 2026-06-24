@@ -774,6 +774,10 @@ def main() -> None:
     last_ckpt_path = output_dir / "last_model.pth"
     metrics_path   = output_dir / "metrics.csv"
 
+    # Copy model architecture config so infer.py can find it
+    import shutil
+    shutil.copy(checkpoint_path.parent / "config.yaml", output_dir / "config.yaml")
+
     log.info(f"Starting fine-tuning — {epochs} epochs, early stopping patience={es_patience}")
     log.info(f"Output directory: {output_dir}")
 
@@ -823,13 +827,13 @@ def main() -> None:
 
         # Save last checkpoint
         torch.save({
-            "epoch":      epoch,
-            "model":      model.state_dict(),
-            "loss_fn":    loss_fn.state_dict(),
-            "optimizer":  optimizer.state_dict(),
-            "scheduler":  scheduler.state_dict(),
-            "val_eer":    val_metrics["eer"],
-            "config":     cfg,
+            "epoch":       epoch,
+            "model_state": model.state_dict(),
+            "loss_fn":     loss_fn.state_dict(),
+            "optimizer":   optimizer.state_dict(),
+            "scheduler":   scheduler.state_dict(),
+            "val_eer":     val_metrics["eer"],
+            "config":      cfg,
         }, last_ckpt_path)
 
         # Save best checkpoint
@@ -838,11 +842,11 @@ def main() -> None:
             best_epoch = epoch
             es_counter = 0
             torch.save({
-                "epoch":   epoch,
-                "model":   model.state_dict(),
-                "loss_fn": loss_fn.state_dict(),
-                "val_eer": best_eer,
-                "config":  cfg,
+                "epoch":       epoch,
+                "model_state": model.state_dict(),
+                "loss_fn":     loss_fn.state_dict(),
+                "val_eer":     best_eer,
+                "config":      cfg,
             }, best_ckpt_path)
             log.info(f"  ✓ New best EER: {best_eer:.2f}% — checkpoint saved")
         else:
