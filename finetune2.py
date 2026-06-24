@@ -554,10 +554,10 @@ def evaluate(model, loader, device, cfg: dict) -> dict:
 
         # Score: probability of being real (label 0)
         if logits.shape[-1] == 2:
-            probs  = F.softmax(logits, dim=-1)
+            probs  = F.softmax(logits.float(), dim=-1)
             scores = probs[:, 0].cpu().numpy()
         else:
-            scores = logits.squeeze(-1).cpu().numpy()
+            scores = logits.squeeze(-1).float().cpu().numpy()
 
         all_scores.append(scores)
         all_labels.append(labels.cpu().numpy())
@@ -596,7 +596,7 @@ def main() -> None:
     seed = cfg.get("seed", 42)
     set_seed(seed)
 
-    # ── Device ───────────────────────────────────────────────────────────────
+    # ── Device ba
     if args.smoke_test:
         device = torch.device("cpu")
         log.info("SMOKE TEST MODE — CPU, 50 clips, 2 epochs")
