@@ -157,7 +157,7 @@ training:
 
   # Batch size: 64 is safe for A100 80GB with WavLM Large + 7s clips.
   # If you hit OOM, reduce to 48 or 32.
-  batch_size: 64
+  batch_size: 32
   num_workers: 8               # A100 can feed data fast — use 8 workers
 
   # Mixed precision: bf16 is preferred over fp16 on A100/H100.
