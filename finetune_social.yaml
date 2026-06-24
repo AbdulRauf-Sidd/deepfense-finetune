@@ -47,10 +47,16 @@ data:
     test:  testing
 
   # Label convention: subfolders named "real" and "fake"
-  # Expected structure:
+  # Supported structures:
+  #   ai_audio_dataset/train/real/*.wav
+  #   ai_audio_dataset/train/fake/*.wav
+  #   ai_audio_dataset/validation/real/*.wav
+  #   ai_audio_dataset/validation/fake/*.wav
+  # or:
   #   ai_audio_dataset/real/train/*.wav
   #   ai_audio_dataset/fake/train/*.wav
-  #   ai_audio_dataset/real/validation/*.wav  etc.
+  #   ai_audio_dataset/real/validation/*.wav
+  #   ai_audio_dataset/fake/validation/*.wav
   real_label: 0
   fake_label: 1
 

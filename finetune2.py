@@ -97,6 +97,8 @@ class AudioDataset(Dataset):
         split: str,
         sample_rate: int   = 16_000,
         max_duration: float = 7.0,
+        real_label: int     = 0,
+        fake_label: int     = 1,
         augment: bool      = False,
         augment_cfg: dict  = None,
         smoke_test: bool   = False,       # if True, only load 50 files
@@ -108,10 +110,15 @@ class AudioDataset(Dataset):
 
         self.files = []   # list of (path, label)
 
-        for label_name, label_id in [("real", 0), ("fake", 1)]:
-            class_dir = root / split / label_name
+        for label_name, label_id in [("real", real_label), ("fake", fake_label)]:
+            split_first_dir = root / split / label_name
+            label_first_dir = root / label_name / split
+            class_dir = split_first_dir if split_first_dir.exists() else label_first_dir
             if not class_dir.exists():
-                log.warning(f"Directory not found: {class_dir} — skipping")
+                log.warning(
+                    f"Directory not found for {label_name}/{split}: "
+                    f"tried {split_first_dir} and {label_first_dir} — skipping"
+                )
                 continue
             wavs = [
                 f for f in class_dir.rglob("*")
@@ -373,19 +380,25 @@ class AMSoftmaxLoss(nn.Module):
         self.weight  = nn.Parameter(torch.randn(num_classes, in_features))
         nn.init.xavier_uniform_(self.weight)
 
-    def forward(self, features: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+    def logits(self, features: torch.Tensor, labels: torch.Tensor = None) -> torch.Tensor:
         # Normalise features and weights
         features = F.normalize(features, dim=1)
         weights  = F.normalize(self.weight, dim=1)
 
         cosine   = F.linear(features, weights)           # (B, num_classes)
+
+        if labels is None:
+            return self.scale * cosine
+
         one_hot  = torch.zeros_like(cosine)
         one_hot.scatter_(1, labels.view(-1, 1), 1.0)
 
         # Subtract margin from the target class cosine
         cosine_m = cosine - one_hot * self.margin
-        logits   = self.scale * cosine_m
+        return self.scale * cosine_m
 
+    def forward(self, features: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        logits = self.logits(features, labels)
         return F.cross_entropy(logits, labels)
 
 
@@ -486,6 +499,7 @@ def train_one_epoch(
     model, loader, optimizer, loss_fn, device, scaler, cfg: dict
 ) -> dict:
     model.train()
+    loss_fn.train()
     total_loss = 0.0
     correct    = 0
     total      = 0
@@ -507,16 +521,18 @@ def train_one_epoch(
                             enabled=device.type == "cuda"):
             out      = model(audio)
             features = out["embeddings"]
-            logits   = out["logits"] if out["logits"] is not None else out["scores"]
+            logits   = loss_fn.logits(features)
             loss     = loss_fn(features, labels) / accum_steps
 
         scaler.scale(loss).backward()
 
         if (step + 1) % accum_steps == 0:
             scaler.unscale_(optimizer)
-            nn.utils.clip_grad_norm_(
-                [p for p in model.parameters() if p.requires_grad], grad_clip
-            )
+            nn.utils.clip_grad_norm_([
+                p for group in optimizer.param_groups
+                for p in group["params"]
+                if p.requires_grad
+            ], grad_clip)
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad()
@@ -533,8 +549,9 @@ def train_one_epoch(
 
 
 @torch.no_grad()
-def evaluate(model, loader, device, cfg: dict) -> dict:
+def evaluate(model, loss_fn, loader, device, cfg: dict) -> dict:
     model.eval()
+    loss_fn.eval()
     all_scores = []
     all_labels = []
     total_loss = 0.0
@@ -549,15 +566,12 @@ def evaluate(model, loader, device, cfg: dict) -> dict:
         with torch.autocast(device_type=device.type, dtype=precision,
                             enabled=device.type == "cuda"):
             out = model(audio)
-
-        logits = out["logits"] if out["logits"] is not None else out["scores"]
+            features = out["embeddings"]
+            logits = loss_fn.logits(features)
 
         # Score: probability of being real (label 0)
-        if logits.shape[-1] == 2:
-            probs  = F.softmax(logits.float(), dim=-1)
-            scores = probs[:, 0].cpu().numpy()
-        else:
-            scores = logits.squeeze(-1).float().cpu().numpy()
+        probs  = F.softmax(logits.float(), dim=-1)
+        scores = probs[:, 0].cpu().numpy()
 
         all_scores.append(scores)
         all_labels.append(labels.cpu().numpy())
@@ -627,6 +641,8 @@ def main() -> None:
         split        = train_split,
         sample_rate  = sample_rate,
         max_duration = max_duration,
+        real_label   = data_cfg.get("real_label", 0),
+        fake_label   = data_cfg.get("fake_label", 1),
         augment      = True,
         augment_cfg  = augment_cfg,
         smoke_test   = args.smoke_test,
@@ -636,6 +652,8 @@ def main() -> None:
         split        = val_split,
         sample_rate  = sample_rate,
         max_duration = max_duration,
+        real_label   = data_cfg.get("real_label", 0),
+        fake_label   = data_cfg.get("fake_label", 1),
         augment      = False,
         smoke_test   = args.smoke_test,
     )
@@ -776,7 +794,7 @@ def main() -> None:
         )
 
         # Validate
-        val_metrics = evaluate(model, val_loader, device, cfg)
+        val_metrics = evaluate(model, loss_fn, val_loader, device, cfg)
 
         scheduler.step()
         elapsed = time.time() - t_epoch
