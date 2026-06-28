@@ -350,6 +350,34 @@ def compute_all_metrics(labels: np.ndarray, scores: np.ndarray) -> dict:
     return evaluator.evaluate(labels, scores)
 
 
+def compute_eer(labels: np.ndarray, p_real: np.ndarray) -> float:
+    """
+    EER from per-sample P(real) probabilities.
+    labels: real=REAL_LABEL=1, fake=FAKE_LABEL=0
+    p_real: higher means more likely real
+    """
+    from scipy.interpolate import interp1d
+    from scipy.optimize import brentq
+
+    thresholds = np.linspace(p_real.min(), p_real.max(), 1000)
+    fprs, fnrs = [], []
+    for t in thresholds:
+        preds = (p_real >= t).astype(int)          # 1 = predicted real
+        tp = np.sum((preds == 1) & (labels == REAL_LABEL))
+        fp = np.sum((preds == 1) & (labels == FAKE_LABEL))
+        tn = np.sum((preds == 0) & (labels == FAKE_LABEL))
+        fn = np.sum((preds == 0) & (labels == REAL_LABEL))
+        fprs.append(fp / (fp + tn + 1e-9))
+        fnrs.append(fn / (fn + tp + 1e-9))
+
+    fprs, fnrs = np.array(fprs), np.array(fnrs)
+    try:
+        eer = brentq(interp1d(fprs, fprs - fnrs), fprs.min(), fprs.max())
+    except Exception:
+        eer = float(np.min(np.abs(fprs - fnrs)))
+    return round(float(eer * 100), 4)
+
+
 def per_class_metrics(
     per_file: list[dict],
     labels: np.ndarray,
@@ -369,19 +397,22 @@ def per_class_metrics(
 
 
 def wrong_predictions_analysis(per_file: list[dict]) -> dict:
-    """For each wrong prediction, record its scores; report per-class averages."""
-    wrong = [r for r in per_file if not r["correct"]]
-    result = {"count": len(wrong), "samples": wrong}
+    """For each wrong/correct prediction, record scores and per-class averages."""
+    wrong   = [r for r in per_file if not r["correct"]]
+    correct = [r for r in per_file if r["correct"]]
+    result  = {"count": len(wrong), "samples": wrong}
+
     for cls_name in ("real", "fake"):
-        subset = [r for r in wrong if r["true_label"] == cls_name]
-        if subset:
-            result[f"{cls_name}_wrong_count"] = len(subset)
-            result[f"{cls_name}_avg_p_real"]  = round(sum(r["p_real"] for r in subset) / len(subset), 6)
-            result[f"{cls_name}_avg_p_fake"]  = round(sum(r["p_fake"] for r in subset) / len(subset), 6)
-        else:
-            result[f"{cls_name}_wrong_count"] = 0
-            result[f"{cls_name}_avg_p_real"]  = None
-            result[f"{cls_name}_avg_p_fake"]  = None
+        for bucket, key in [(wrong, "wrong"), (correct, "correct")]:
+            subset = [r for r in bucket if r["true_label"] == cls_name]
+            if subset:
+                result[f"{cls_name}_{key}_count"]    = len(subset)
+                result[f"{cls_name}_{key}_avg_p_real"] = round(sum(r["p_real"] for r in subset) / len(subset), 6)
+                result[f"{cls_name}_{key}_avg_p_fake"] = round(sum(r["p_fake"] for r in subset) / len(subset), 6)
+            else:
+                result[f"{cls_name}_{key}_count"]      = 0
+                result[f"{cls_name}_{key}_avg_p_real"] = None
+                result[f"{cls_name}_{key}_avg_p_fake"] = None
     return result
 
 
@@ -423,6 +454,7 @@ def print_summary(summary: dict):
     print(f"  Inference time: {summary['inference_time_s']:.1f}s")
 
     print(f"\n--- Aggregate Metrics ---")
+    print(f"  {'EER':<20} {summary['eer']:.4f}%")
     for k, v in summary["metrics"].items():
         if isinstance(v, float):
             print(f"  {k:<20} {v:.4f}")
@@ -445,14 +477,15 @@ def print_summary(summary: dict):
     print(f"  FPR       : {cm['fpr']:.4f}  (fake accepted as real)")
     print(f"  FNR       : {cm['fnr']:.4f}  (real rejected as fake)")
 
-    print(f"\n--- Wrong Predictions ({summary['wrong_predictions']['count']} total) ---")
+    print(f"\n--- Prediction Confidence ---")
     wp = summary["wrong_predictions"]
     for cls_name in ("real", "fake"):
-        n = wp.get(f"{cls_name}_wrong_count", 0)
-        avg_pr = wp.get(f"{cls_name}_avg_p_real")
-        avg_pf = wp.get(f"{cls_name}_avg_p_fake")
-        if n:
-            print(f"  True {cls_name:<4} misclassified: {n:>4}  |  avg p_real={avg_pr:.4f}  avg p_fake={avg_pf:.4f}")
+        for bucket, label in [("correct", "correct"), ("wrong", "wrong ")]:
+            n      = wp.get(f"{cls_name}_{bucket}_count", 0)
+            avg_pr = wp.get(f"{cls_name}_{bucket}_avg_p_real")
+            avg_pf = wp.get(f"{cls_name}_{bucket}_avg_p_fake")
+            if n:
+                print(f"  True {cls_name:<4} {label}: {n:>4}  |  avg p_real={avg_pr:.4f}  avg p_fake={avg_pf:.4f}")
     print(SEP + "\n")
 
 
@@ -532,6 +565,9 @@ def main():
     cm        = confusion_matrix_counts(per_file)
     wrong     = wrong_predictions_analysis(per_file)
 
+    p_real_scores = np.array([r["p_real"] for r in per_file])
+    eer           = compute_eer(labels, p_real_scores)
+
     # Score distribution stats
     score_1d = _metric_get_1d_scores(
         scores, {"bonafide_label": REAL_LABEL, "loss": "crossentropy"}
@@ -559,6 +595,7 @@ def main():
         },
         "model_dir":        str(model_dir),
         "inference_time_s": round(elapsed, 2),
+        "eer":              eer,
         "metrics":          metrics,
         "per_class":        per_class,
         "confusion_matrix": cm,
