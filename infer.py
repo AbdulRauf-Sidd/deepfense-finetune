@@ -368,6 +368,23 @@ def per_class_metrics(
     return results
 
 
+def wrong_predictions_analysis(per_file: list[dict]) -> dict:
+    """For each wrong prediction, record its scores; report per-class averages."""
+    wrong = [r for r in per_file if not r["correct"]]
+    result = {"count": len(wrong), "samples": wrong}
+    for cls_name in ("real", "fake"):
+        subset = [r for r in wrong if r["true_label"] == cls_name]
+        if subset:
+            result[f"{cls_name}_wrong_count"] = len(subset)
+            result[f"{cls_name}_avg_p_real"]  = round(sum(r["p_real"] for r in subset) / len(subset), 6)
+            result[f"{cls_name}_avg_p_fake"]  = round(sum(r["p_fake"] for r in subset) / len(subset), 6)
+        else:
+            result[f"{cls_name}_wrong_count"] = 0
+            result[f"{cls_name}_avg_p_real"]  = None
+            result[f"{cls_name}_avg_p_fake"]  = None
+    return result
+
+
 def confusion_matrix_counts(per_file: list[dict]) -> dict:
     tp = sum(1 for r in per_file if r["true_label"] == "real" and r["predicted_label"] == "real")
     tn = sum(1 for r in per_file if r["true_label"] == "fake" and r["predicted_label"] == "fake")
@@ -427,6 +444,15 @@ def print_summary(summary: dict):
     print(f"  F1        : {cm['f1']:.4f}")
     print(f"  FPR       : {cm['fpr']:.4f}  (fake accepted as real)")
     print(f"  FNR       : {cm['fnr']:.4f}  (real rejected as fake)")
+
+    print(f"\n--- Wrong Predictions ({summary['wrong_predictions']['count']} total) ---")
+    wp = summary["wrong_predictions"]
+    for cls_name in ("real", "fake"):
+        n = wp.get(f"{cls_name}_wrong_count", 0)
+        avg_pr = wp.get(f"{cls_name}_avg_p_real")
+        avg_pf = wp.get(f"{cls_name}_avg_p_fake")
+        if n:
+            print(f"  True {cls_name:<4} misclassified: {n:>4}  |  avg p_real={avg_pr:.4f}  avg p_fake={avg_pf:.4f}")
     print(SEP + "\n")
 
 
@@ -504,6 +530,7 @@ def main():
 
     per_class = per_class_metrics(per_file, labels, scores)
     cm        = confusion_matrix_counts(per_file)
+    wrong     = wrong_predictions_analysis(per_file)
 
     # Score distribution stats
     score_1d = _metric_get_1d_scores(
@@ -536,6 +563,7 @@ def main():
         "per_class":        per_class,
         "confusion_matrix": cm,
         "score_stats":      score_stats,
+        "wrong_predictions": wrong,
         "per_file":         per_file,
     }
 
