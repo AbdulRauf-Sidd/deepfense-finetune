@@ -272,7 +272,7 @@ def run_inference(
             # Swap columns so index REAL_LABEL=1 holds the real score/prob,
             # making the rest of this loop work unchanged.
             features = out["embeddings"]
-            cosine   = loss_fn(features).float()
+            cosine   = loss_fn(features).float().detach()
             probs_ft = F.softmax(cosine, dim=-1).cpu().numpy()
             scores   = cosine.cpu().numpy()[:, [1, 0]]   # col 1 = real logit
             probs    = probs_ft[:, [1, 0]]                # col 1 = P(real)
