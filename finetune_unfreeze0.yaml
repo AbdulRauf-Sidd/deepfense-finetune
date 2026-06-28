@@ -47,7 +47,7 @@ loss:
 training:
   epochs: 30
   optimizer: AdamW
-  lr: 1.0e-4
+  lr: 1.0e-6
   weight_decay: 1.0e-4
   betas: [0.9, 0.999]
   warmup_epochs: 3
