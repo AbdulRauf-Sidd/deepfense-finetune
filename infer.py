@@ -26,6 +26,7 @@ import numpy as np
 import soundfile as sf
 import librosa
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from omegaconf import OmegaConf
 from tqdm import tqdm
@@ -53,6 +54,16 @@ FAKE_LABEL = 0
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+class _AMSoftmaxHead(nn.Module):
+    """Minimal AM-Softmax head used to load finetuned checkpoints."""
+    def __init__(self, in_features: int, num_classes: int = 2):
+        super().__init__()
+        self.weight = nn.Parameter(torch.empty(num_classes, in_features))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return F.linear(F.normalize(x, dim=1), F.normalize(self.weight, dim=1))
+
 
 def find_audio_files(folder: Path) -> list[Path]:
     files = sorted(
@@ -165,7 +176,20 @@ def load_model(model_dir: Path, device: torch.device, wavlm_path: str | None = N
         log.warning(f"  unexpected keys in checkpoint: {incompatible.unexpected_keys}")
     model.eval()
     log.info(f"Loaded model weights from {ckpt_path.name}")
-    return model
+
+    loss_fn = None
+    if "loss_fn" in state:
+        try:
+            lf_state = state["loss_fn"]
+            num_classes, in_features = lf_state["weight"].shape
+            loss_fn = _AMSoftmaxHead(in_features, num_classes).to(device)
+            loss_fn.load_state_dict(lf_state)
+            loss_fn.eval()
+            log.info("Loaded finetuned AM-Softmax head from checkpoint")
+        except Exception as e:
+            log.warning(f"Could not load AM-Softmax head: {e} — using model's built-in classifier")
+
+    return model, loss_fn
 
 
 def pad_batch(waveforms: list[np.ndarray], max_len_samples: int | None):
@@ -197,6 +221,7 @@ def run_inference(
     batch_size: int,
     target_sr: int,
     max_len_samples: int | None,
+    loss_fn=None,
 ) -> tuple[list[dict], np.ndarray, np.ndarray]:
     """
     Returns:
@@ -241,13 +266,23 @@ def run_inference(
         with torch.no_grad():
             out = model(x, mask=mask)
 
-        scores = out["scores"]          # (B,) or (B,C)
-        probs  = out["probs"]           # (B,) or (B,C) – post-softmax/sigmoid
-
-        if torch.is_tensor(scores):
-            scores = scores.detach().cpu().numpy()
-        if torch.is_tensor(probs):
-            probs = probs.detach().cpu().numpy()
+        if loss_fn is not None:
+            # Finetuned checkpoint: use the AM-Softmax head.
+            # Training convention was real=0, fake=1.
+            # Swap columns so index REAL_LABEL=1 holds the real score/prob,
+            # making the rest of this loop work unchanged.
+            features = out["embeddings"]
+            cosine   = loss_fn(features).float()
+            probs_ft = F.softmax(cosine, dim=-1).cpu().numpy()
+            scores   = cosine.cpu().numpy()[:, [1, 0]]   # col 1 = real logit
+            probs    = probs_ft[:, [1, 0]]                # col 1 = P(real)
+        else:
+            scores = out["scores"]          # (B,) or (B,C)
+            probs  = out["probs"]           # (B,) or (B,C) – post-softmax/sigmoid
+            if torch.is_tensor(scores):
+                scores = scores.detach().cpu().numpy()
+            if torch.is_tensor(probs):
+                probs = probs.detach().cpu().numpy()
 
         # Build 1-D detection score (higher → more bonafide)
         dummy_params = {"bonafide_label": REAL_LABEL, "loss": "crossentropy"}
@@ -447,13 +482,14 @@ def main():
     log.info(f"Real files: {len(real_files)}  |  Fake files: {len(fake_files)}")
 
     # Load model
-    model = load_model(model_dir, device, wavlm_path=args.wavlm_path)
+    model, loss_fn = load_model(model_dir, device, wavlm_path=args.wavlm_path)
 
     # Inference
     t0 = time.time()
     per_file, labels, scores = run_inference(
         model, all_files, all_labels, device,
         args.batch_size, args.sr, max_len_samples,
+        loss_fn=loss_fn,
     )
     elapsed = time.time() - t0
 
