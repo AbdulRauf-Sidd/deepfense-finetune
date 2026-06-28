@@ -1,0 +1,67 @@
+seed: 42
+
+finetune:
+  checkpoint: models/wavlm/codecfake_wavlm_nes2net_best_model.pth
+
+frontend:
+  freeze: true
+  unfreeze_last_n_layers: 2
+  unfreeze_lr: 2.0e-6            # 5x lower than backend LR
+
+data:
+  root: ai_audio_dataset
+  splits:
+    train: train
+    val:   validation
+    test:  testing
+  real_label: 0
+  fake_label: 1
+  sample_rate: 16000
+  max_duration: 7.0
+
+augmentations:
+  - name: Codec
+    params:
+      codecs: [aac, mp3, opus]
+      bitrates:
+        aac:  [64, 96, 128, 192, 256]
+        mp3:  [96, 128, 192]
+        opus: [32, 48, 64, 96]
+      prob: 0.65
+
+  - name: RawBoost
+    params:
+      algo: [1, 2, 3]
+      prob: 0.35
+
+  - name: SpeedPerturb
+    params:
+      rates: [0.95, 1.0, 1.05]
+      prob: 0.20
+
+loss:
+  name: AM-Softmax
+  params:
+    margin: 0.2
+    scale:  30
+
+training:
+  epochs: 40
+  optimizer: AdamW
+  lr: 1.0e-5
+  weight_decay: 1.0e-4
+  betas: [0.9, 0.999]
+  warmup_epochs: 3
+  eta_min: 1.0e-6
+  batch_size: 32
+  num_workers: 8
+  mixed_precision: bf16
+  gradient_clip: 1.0
+  gradient_accumulation_steps: 1
+  early_stopping:
+    patience: 10
+    monitor: eer
+    mode: min
+
+output:
+  dir: outputs/unfreeze2

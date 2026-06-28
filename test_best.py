@@ -3,41 +3,32 @@
 Run the best fine-tuned checkpoint against the test set.
 
 Usage:
-    python test_best.py
+    python test_best.py                    # defaults to outputs/unfreeze0
+    python test_best.py outputs/unfreeze2
+    python test_best.py outputs/unfreeze4
 """
 
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-BEST_CHECKPOINT = Path("outputs/finetune_social_media/best_model.pth")
-MODEL_DIR       = BEST_CHECKPOINT.parent
-ARCH_CONFIG     = Path("models/wavlm/config.yaml")
-
-REAL_DIR   = Path("ai_audio_dataset/testing/real")
-FAKE_DIR   = Path("ai_audio_dataset/testing/fake")
-OUTPUT_JSON = Path("outputs/finetune_social_media/test_results.json")
+REAL_DIR = Path("ai_audio_dataset/testing/real")
+FAKE_DIR = Path("ai_audio_dataset/testing/fake")
 
 
 def main():
-    if not BEST_CHECKPOINT.exists():
-        sys.exit(f"Checkpoint not found: {BEST_CHECKPOINT}")
+    model_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("outputs/unfreeze0")
+    checkpoint = model_dir / "best_model.pth"
 
-    # infer.py needs config.yaml alongside the .pth
-    config_dst = MODEL_DIR / "config.yaml"
-    if not config_dst.exists():
-        if not ARCH_CONFIG.exists():
-            sys.exit(f"Architecture config not found: {ARCH_CONFIG}")
-        shutil.copy(ARCH_CONFIG, config_dst)
-        print(f"Copied {ARCH_CONFIG} → {config_dst}")
+    if not checkpoint.exists():
+        sys.exit(f"Checkpoint not found: {checkpoint}")
 
     cmd = [
         sys.executable, "infer.py",
-        "--model-dir",  str(MODEL_DIR),
+        "--model-dir",  str(model_dir),
         "--real-dir",   str(REAL_DIR),
         "--fake-dir",   str(FAKE_DIR),
-        "--output",     str(OUTPUT_JSON),
+        "--output",     str(model_dir / "test_results.json"),
         "--batch-size", "16",
         "--max-len",    "7",
     ]
