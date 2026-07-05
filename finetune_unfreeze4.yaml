@@ -6,7 +6,7 @@ finetune:
 frontend:
   freeze: true
   unfreeze_last_n_layers: 4
-  unfreeze_lr: 1.0e-6            # 10x lower than backend LR
+  unfreeze_lr: 1.0e-7            # 10x lower than backend LR
 
 data:
   root: ai_audio_dataset
@@ -43,16 +43,16 @@ loss:
   name: AM-Softmax
   params:
     margin: 0.2
-    scale:  30
+    scale:  64
 
 training:
-  epochs: 40
+  epochs: 50
   optimizer: AdamW
-  lr: 1.0e-4
+  lr: 2.0e-6
   weight_decay: 1.0e-4
   betas: [0.9, 0.999]
   warmup_epochs: 5              # longer warmup — more params unfrozen
-  eta_min: 1.0e-6
+  eta_min: 1.0e-7
   batch_size: 32
   num_workers: 8
   mixed_precision: bf16
