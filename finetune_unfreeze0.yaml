@@ -45,9 +45,9 @@ loss:
     scale:  64
 
 training:
-  epochs: 30
+  epochs: 50
   optimizer: AdamW
-  lr: 1.0e-5
+  lr: 2.0e-6
   weight_decay: 1.0e-4
   betas: [0.9, 0.999]
   warmup_epochs: 3
@@ -58,9 +58,9 @@ training:
   gradient_clip: 1.0
   gradient_accumulation_steps: 1
   early_stopping:
-    patience: 7
+    patience: 10
     monitor: eer
     mode: min
 
 output:
-  dir: outputs/unfreeze0
+  dir: outputs/unfreeze0_final
